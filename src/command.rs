@@ -10,9 +10,15 @@ macro_rules! impl_command {
             data: Option<&'a str>,
         }
 
+        impl<'a> core::default::Default for $cmd_name<'a> {
+            fn default() -> Self {
+                Self { data: None }
+            }
+        }
+
         impl<'a> AtCommand<'a> for $cmd_name<'a> {
             fn cmd(&self) -> &'static str {
-                $cmd
+                concat!("AT+", $cmd)
             }
 
             fn data(&self) -> Option<&str> {
@@ -26,9 +32,15 @@ macro_rules! impl_command {
     ($cmd_name:ident, $cmd:expr, $data:expr) => {
         pub struct $cmd_name;
 
+        impl core::default::Default for $cmd_name {
+            fn default() -> Self {
+                Self
+            }
+        }
+
         impl<'a> AtCommand<'a> for $cmd_name {
             fn cmd(&self) -> &'static str {
-                $cmd
+                concat!("AT+", $cmd)
             }
 
             fn data(&self) -> Option<&str> {

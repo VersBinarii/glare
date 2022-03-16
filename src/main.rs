@@ -6,26 +6,33 @@ use glare as _;
 #[rtic::app(device = stm32f4xx_hal::pac)]
 mod app {
     use cortex_m::singleton;
-    use glare::driver::Esp01;
-    use heapless::spsc::{Consumer, Producer, Queue};
+    use glare::{
+        command::CwModeQuery,
+        driver::{Esp01, MAX_RESP_LEN},
+    };
+    use heapless::{
+        spsc::{Consumer, Producer, Queue},
+        String,
+    };
     use stm32f4xx_hal::{
         pac::USART1,
         prelude::*,
-        serial::{config::Config, Event, Rx, Serial, Tx},
+        serial::{config::Config, Event, Serial},
+        timer::SysDelay,
     };
 
     const QUEUE_LEN: usize = 8;
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        esp01: Esp01<USART1>,
+    }
 
     #[local]
     struct Local {
-        esp01: Esp01<USART1>,
-        tx_prod: Producer<'static, u8, QUEUE_LEN>,
-        tx_con: Consumer<'static, u8, QUEUE_LEN>,
-        rx_prod: Producer<'static, u8, QUEUE_LEN>,
-        rx_con: Consumer<'static, u8, QUEUE_LEN>,
+        rx_prod: Producer<'static, String<MAX_RESP_LEN>, QUEUE_LEN>,
+        rx_con: Consumer<'static, String<MAX_RESP_LEN>, QUEUE_LEN>,
+        delay: SysDelay,
     }
 
     #[init]
@@ -40,7 +47,7 @@ mod app {
         let rx_pin = gpioa.pa10.into_alternate();
 
         // configure serial
-        let serial: Serial<USART1, _, u8> = Serial::new(
+        let mut serial: Serial<USART1, _, u8> = Serial::new(
             dp.USART1,
             (tx_pin, rx_pin),
             Config::default().baudrate(115200.bps()),
@@ -48,67 +55,59 @@ mod app {
         )
         .unwrap();
 
-        serial.listen(Event::Rxne);
+        //serial.listen(Event::Rxne);
         serial.listen(Event::Idle);
         // Make this Serial object use u16s instead of u8s
 
         let esp01 = Esp01::new(serial);
 
-        let rx_queue = singleton!(:Queue<u8, QUEUE_LEN> = Queue::new()).unwrap();
-        let tx_queue = singleton!(:Queue<u8, QUEUE_LEN> = Queue::new()).unwrap();
+        let rx_queue = singleton!(:Queue<String<MAX_RESP_LEN>, QUEUE_LEN> = Queue::new()).unwrap();
 
         let (rx_prod, rx_con) = rx_queue.split();
-        let (tx_prod, tx_con) = tx_queue.split();
         defmt::println!("Hello from init");
 
+        let delay = ctx.core.SYST.delay(&clocks);
         (
-            Shared {},
+            Shared { esp01 },
             Local {
-                tx_con,
-                tx_prod,
                 rx_con,
                 rx_prod,
+                delay,
             },
             init::Monotonics(),
         )
     }
 
-    #[idle(local = [rx_con, tx_prod])]
-    fn idle(cx: idle::Context) -> ! {
+    #[idle(shared = [esp01], local = [rx_con, delay])]
+    fn idle(mut ctx: idle::Context) -> ! {
         // Locals in idle have lifetime 'static
-
+        let delay = ctx.local.delay;
         defmt::println!("Hello Idle task");
 
         loop {
-            if let Some(byte) = cx.local.rx_con.dequeue() {
-                defmt::println!("Got byte: {}", byte);
-                let _ = cx.local.tx_prod.enqueue(byte);
+            ctx.shared
+                .esp01
+                .lock(|esp01| match esp01.send_command(CwModeQuery::default()) {
+                    Ok(_) => defmt::println!("Success sending"),
+                    Err(_) => defmt::println!("Error sending"),
+                });
+            if let Some(response) = ctx.local.rx_con.dequeue() {
+                defmt::println!("Got response: {}", response.as_str());
             }
+            delay.delay_ms(1000u32);
         }
     }
 
-    #[task(binds = USART1, local = [tx, rx, rx_prod, tx_con])]
-    fn usart1(ctx: usart1::Context) {
-        let tx = ctx.local.tx;
-        let rx = ctx.local.rx;
-
-        rx.unlisten();
-
-        if tx.is_tx_empty() {
-            defmt::println!("TX interrupt");
-            if let Some(byte) = ctx.local.tx_con.dequeue() {
-                let _ = tx.write(byte);
+    #[task(binds = USART1, shared = [esp01],local = [rx_prod])]
+    fn usart1(mut ctx: usart1::Context) {
+        let rx_prod = ctx.local.rx_prod;
+        ctx.shared.esp01.lock(|esp01| {
+            if esp01.is_response_ready() {
+                let response = esp01.get_response().unwrap();
+                rx_prod.enqueue(response).unwrap();
             }
-            tx.unlisten();
-        }
 
-        if rx.is_rx_not_empty() {
-            let byte = rx.read().unwrap();
-
-            let _ = ctx.local.rx_prod.enqueue(byte);
-            tx.listen();
-        }
-
-        rx.listen();
+            esp01.read_byte().unwrap();
+        });
     }
 }
