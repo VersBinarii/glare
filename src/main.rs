@@ -20,7 +20,7 @@ mod app {
         pac::{GPIOA, TIM2, USART6},
         prelude::*,
         serial::{config::Config, Event, Serial},
-        timer::{CounterHz, Event as TimEvent, SysDelay},
+        timer::SysDelay,
     };
 
     const QUEUE_LEN: usize = 8;
@@ -73,7 +73,6 @@ mod app {
             tim_raw.ccer.modify(|_, w| w.cc1e().set_bit());
         }
         let _ = timer2.start(6.MHz());
-        //timer2.listen(TimEvent::Update);
 
         // I2c pb6 - SCL pb7 - SDA
         let i2c_scl = gpiob.pb6.into_alternate_open_drain();
@@ -112,9 +111,7 @@ mod app {
         )
         .unwrap();
 
-        //serial.listen(Event::Rxne);
         serial.listen(Event::Idle);
-        // Make this Serial object use u16s instead of u8s
 
         let esp01 = Esp01::new(serial);
 
@@ -137,10 +134,7 @@ mod app {
 
     #[idle(shared = [esp01], local = [rx_con, delay])]
     fn idle(mut ctx: idle::Context) -> ! {
-        // Locals in idle have lifetime 'static
         let delay = ctx.local.delay;
-        defmt::println!("Hello Idle task");
-
         loop {
             ctx.shared
                 .esp01
@@ -172,14 +166,4 @@ mod app {
     fn exti95(_ctx: exti95::Context) {
         defmt::println!("Exti interrupt triggered");
     }
-    /*
-        #[task(binds = TIM2, local = [tim2_ch1, timer2] )]
-        fn tim2(ctx: tim2::Context) {
-            let tim = ctx.local.timer2;
-            tim.unlisten(TimEvent::Update);
-            ctx.local.tim2_ch1.toggle();
-            tim.clear_interrupt(TimEvent::Update);
-            tim.listen(TimEvent::Update);
-        }
-    */
 }
