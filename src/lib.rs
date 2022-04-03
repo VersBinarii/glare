@@ -8,6 +8,7 @@ use stm32f4xx_hal as _; // memory layout
 
 use panic_probe as _;
 
+pub mod camera;
 pub mod command;
 pub mod driver;
 
